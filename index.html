@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+    <meta charset="UTF-8">
+    <title>POS</title>
+    <style>
+        body { font-family: Arial; background: #0077be; color: white; text-align: center; padding: 20px; }
+        .box { background: white; color: #333; padding: 20px; border-radius: 15px; max-width: 400px; margin: auto; }
+        input, button { width: 100%; padding: 12px; margin: 8px 0; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
+        button { background: #ffcc00; font-weight: bold; border: none; cursor: pointer; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <h1>🍔 Κάβουρας POS</h1>
+    <div class="box">
+        <div id="roleSelection">
+            <button onclick="setRole('client')" style="background:#004080; color:white;">Είμαι Πελάτης</button>
+            <button onclick="setRole('pos')" style="background:#0077be; color:white;">Είμαι Ταμείο</button>
+        </div>
+
+        <div id="clientView" class="hidden">
+            <h2>Πελάτης</h2>
+            <button onclick="setId('maria')">Μαρία</button>
+            <button onclick="setId('dimitris')">Δημήτρης</button>
+            <button onclick="setId('dionisys')">Διονύσης</button>
+            <button onclick="setId('athens')">Αθήνα</button>
+            <input type="text" id="uId" placeholder="ID">
+            <button id="bLogin">Σύνδεση</button>
+            <div id="cDash" class="hidden">
+                <div id="cBal" style="font-size:24px; color:#0077be; font-weight:bold;">0 🐚</div>
+                <button id="bNfc" style="background:#28a745; color:white;">NFC</button>
+                <p id="nStat"></p>
+            </div>
+        </div>
+
+        <div id="posView" class="hidden">
+            <h2>Ταμείο</h2>
+            <input type="number" id="cAmount" value="5.00">
+            <button id="bPos" style="background:#28a745; color:white;">Είσπραξη</button>
+            <p id="pStat" style="font-weight:bold;"></p>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, doc, onSnapshot, runTransaction, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        const db = getFirestore(initializeApp({
+            apiKey: "AIzaSyDummyKeyForTestingOnly",
+            authDomain: "dummy.firebaseapp.com",
+            projectId: "trapeza-vithou",
+            storageBucket: "dummy.appspot.com",
+            messagingSenderId: "123456",
+            appId: "1:123:web:123"
+        }));
+
+        let cId = "", unsub = null;
+
+        window.setRole = function(r) {
+            document.getElementById("roleSelection").classList.add("hidden");
+            document.getElementById(r === 'client' ? "clientView" : "posView").classList.remove("hidden");
+        };
+
+        window.setId = function(id) {
+            document.getElementById("uId").value = id;
+        };
+
+        document.getElementById("bLogin").onclick = async function() {
+            cId = document.getElementById("uId").value.trim().toLowerCase();
+            if (!cId) return alert("Βάλτε ID!");
+            document.getElementById("cDash").classList.remove("hidden");
+            const b = document.getElementById("cBal");
+            if (unsub) unsub();
+            const ref = doc(db, "accounts", cId);
+            try {
+                const s = await getDoc(ref);
+                if (!s.exists()) await setDoc(ref, { balance: 100 });
+            } catch(e) {}
+            unsub = onSnapshot(ref, (snap) => {
+                b.innerText = (snap.exists() ? (snap.data().balance || 0) : 0) + " 🐚";
+            });
+        };
+
+        document.getElementById("bNfc").onclick = async function() {
+            const st = document.getElementById("nStat");
+            if (!('NDEFWriter' in window)) { st.innerText = "NFC unsupported"; return; }
+            try {
+                const w = new NDEFWriter();
+                await w.write({ records: [{ recordType: "text", data: cId }] });
+                st.innerText = "Έτοιμο!";
+            } catch (e) { st.innerText = "Error: " + e; }
+        };
+
+        document.getElementById("bPos").onclick = async function() {
+            const st = document.getElementById("pStat");
+            const amt = parseFloat(document.getElementById("cAmount").value);
+            if (isNaN(amt) || amt <= 0) { alert("Ποσό!"); return; }
+            if (!('NDEFReader' in window)) { st.innerText = "NFC unsupported"; return; }
+            try {
+                const reader = new NDEFReader();
+                await reader.scan();
+                st.innerText = "Φέρτε το κινητό...";
+                reader.onreading = async ev => {
+                    for (const rec of ev.records) {
+                        if (rec.recordType === "text") {
+                            const id = new TextDecoder().decode(rec.payload);
+                            const ref = doc(db, "accounts", id);
+                            try {
+                                await runTransaction(db, async (t) => {
+                                    const ds = await t.get(ref);
+                                    if (!ds.exists()) throw "Χρήστης δεν βρέθηκε";
+                                    const bal = ds.data().balance || 0;
+                                    if (bal < amt) throw "Λίγα κοχύλια!";
+                                    t.update(ref, { balance: bal - amt });
+                                });
+                                st.style.color = "lightgreen";
+                                st.innerText = "Επιτυχία!";
+                            } catch (err) {
+                                st.style.color = "orange";
+                                st.innerText = "Σφάλμα: " + err;
+                            }
+                        }
+                    }
+                };
+            } catch (e) {
+                st.style.color = "red";
+                st.innerText = "NFC Error: " + e;
+            }
+        };
+    </script>
+</body>
+</html>
